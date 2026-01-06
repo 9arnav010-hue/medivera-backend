@@ -21,7 +21,7 @@ const ACHIEVEMENTS = [
   { id: 'vision_5', title: 'Image Explorer', description: 'Analyze 5 medical images', icon: '🔍', category: 'vision', target: 5, xp: 75 },
   { id: 'vision_10', title: 'Vision Master', description: 'Analyze 10 medical images', icon: '🦅', category: 'vision', target: 10, xp: 150 },
   
-  // Symptom Checker Achievements - NEW!
+  // Symptom Checker Achievements
   { id: 'first_symptom', title: 'Self Diagnosis', description: 'Complete your first symptom check', icon: '🩺', category: 'symptom', target: 1, xp: 15 },
   { id: 'symptom_5', title: 'Health Detective', description: 'Complete 5 symptom checks', icon: '🔬', category: 'symptom', target: 5, xp: 50 },
   { id: 'symptom_10', title: 'Symptom Tracker', description: 'Complete 10 symptom checks', icon: '📋', category: 'symptom', target: 10, xp: 100 },
@@ -95,11 +95,11 @@ export const initializeAchievements = async (userId) => {
   try {
     console.log(`🎯 Initializing achievements for user: ${userId}`);
     
-    // Check if achievements already exist
+    // CRITICAL FIX: Check if achievements already exist
     const existingCount = await Achievement.countDocuments({ user: userId });
     if (existingCount > 0) {
       console.log(`✅ User already has ${existingCount} achievements, skipping initialization`);
-      return { success: true, message: 'Achievements already exist', count: existingCount };
+      return { success: true, message: 'Achievements already exist', count: existingCount, skipped: true };
     }
 
     const achievements = ACHIEVEMENTS.map(ach => ({
@@ -194,7 +194,7 @@ export const initializeAchievements = async (userId) => {
   }
 };
 
-// Check and update achievements
+// CRITICAL FIX: Check and update achievements with duplicate prevention
 export const checkAchievements = async (userId, type, count) => {
   try {
     console.log(`🔍 Checking achievements for user ${userId}, type: ${type}, count: ${count}`);
@@ -242,46 +242,57 @@ export const checkAchievements = async (userId, type, count) => {
     console.log(`📋 Checking achievement IDs: ${achievementIds.join(', ')}`);
 
     for (const achId of achievementIds) {
+      // CRITICAL FIX: Only find INCOMPLETE achievements
       const achievement = await Achievement.findOne({
         user: userId,
         achievementId: achId,
-        completed: false
+        completed: false  // Only get incomplete ones
       });
 
       if (achievement) {
-        achievement.progress = count;
-        
-        if (achievement.progress >= achievement.target) {
-          achievement.completed = true;
-          achievement.completedAt = new Date();
+        // CRITICAL FIX: Only update progress if count is greater than current
+        if (count > achievement.progress) {
+          achievement.progress = count;
           
-          console.log(`🎉 Achievement unlocked: ${achievement.title} (+${achievement.reward.xp} XP)`);
-          
-          // Award XP
-          const levelUp = user.addXP(achievement.reward.xp);
-          
-          // Add badge
-          user.badges.push({
-            name: achievement.title,
-            earnedAt: new Date(),
-            icon: achievement.icon
-          });
+          // CRITICAL FIX: Check if target reached AND not already completed
+          if (achievement.progress >= achievement.target && !achievement.completed) {
+            achievement.completed = true;
+            achievement.completedAt = new Date();
+            
+            console.log(`🎉 Achievement unlocked: ${achievement.title} (+${achievement.reward.xp} XP)`);
+            
+            // Award XP
+            const levelUp = user.addXP(achievement.reward.xp);
+            
+            // CRITICAL FIX: Check if badge already exists before adding
+            const badgeExists = user.badges.some(b => b.name === achievement.title);
+            if (!badgeExists) {
+              user.badges.push({
+                name: achievement.title,
+                earnedAt: new Date(),
+                icon: achievement.icon
+              });
+            }
 
-          unlockedAchievements.push({
-            ...achievement.toObject(),
-            levelUp: levelUp.leveledUp ? levelUp.newLevel : null
-          });
+            unlockedAchievements.push({
+              ...achievement.toObject(),
+              levelUp: levelUp.leveledUp ? levelUp.newLevel : null
+            });
+            
+            await achievement.save();
+          } else if (achievement.progress < achievement.target) {
+            // Just update progress, don't unlock
+            await achievement.save();
+          }
         }
-        
-        await achievement.save();
       }
     }
 
-    // Check special achievements
+    // Check special achievements (without duplicate unlocking)
     const totalSessions = user.stats.totalChats + user.stats.totalReports + user.stats.totalVisionAnalysis + (user.stats.totalSymptomChecks || 0);
     console.log(`📊 Total sessions: ${totalSessions}`);
     
-    // Completionist - NOW REQUIRES 4 FEATURES (including Symptom Checker)
+    // Completionist - REQUIRES 4 FEATURES (including Symptom Checker)
     if (user.stats.totalChats > 0 && user.stats.totalReports > 0 && user.stats.totalVisionAnalysis > 0 && (user.stats.totalSymptomChecks || 0) > 0) {
       const completionist = await Achievement.findOne({
         user: userId,
@@ -296,11 +307,15 @@ export const checkAchievements = async (userId, type, count) => {
         await completionist.save();
         
         const levelUp = user.addXP(completionist.reward.xp);
-        user.badges.push({
-          name: completionist.title,
-          earnedAt: new Date(),
-          icon: completionist.icon
-        });
+        
+        const badgeExists = user.badges.some(b => b.name === completionist.title);
+        if (!badgeExists) {
+          user.badges.push({
+            name: completionist.title,
+            earnedAt: new Date(),
+            icon: completionist.icon
+          });
+        }
         
         console.log(`🏆 Completionist achievement unlocked!`);
         
@@ -326,11 +341,15 @@ export const checkAchievements = async (userId, type, count) => {
         await dedicated.save();
         
         const levelUp = user.addXP(dedicated.reward.xp);
-        user.badges.push({
-          name: dedicated.title,
-          earnedAt: new Date(),
-          icon: dedicated.icon
-        });
+        
+        const badgeExists = user.badges.some(b => b.name === dedicated.title);
+        if (!badgeExists) {
+          user.badges.push({
+            name: dedicated.title,
+            earnedAt: new Date(),
+            icon: dedicated.icon
+          });
+        }
         
         console.log(`💎 Dedicated User achievement unlocked!`);
         
@@ -356,11 +375,15 @@ export const checkAchievements = async (userId, type, count) => {
         await guru.save();
         
         const levelUp = user.addXP(guru.reward.xp);
-        user.badges.push({
-          name: guru.title,
-          earnedAt: new Date(),
-          icon: guru.icon
-        });
+        
+        const badgeExists = user.badges.some(b => b.name === guru.title);
+        if (!badgeExists) {
+          user.badges.push({
+            name: guru.title,
+            earnedAt: new Date(),
+            icon: guru.icon
+          });
+        }
         
         console.log(`🧘 Health Guru achievement unlocked!`);
         
@@ -371,7 +394,10 @@ export const checkAchievements = async (userId, type, count) => {
       }
     }
 
-    await user.save();
+    // CRITICAL FIX: Only save user if there were changes
+    if (unlockedAchievements.length > 0) {
+      await user.save();
+    }
     
     console.log(`✅ Total unlocked achievements: ${unlockedAchievements.length}`);
     
@@ -413,7 +439,7 @@ export const getAchievements = async (req, res) => {
   }
 };
 
-// Get user stats
+// CRITICAL FIX: Get user stats with proper counting
 export const getUserStats = async (req, res) => {
   try {
     console.log(`📊 Fetching stats for user: ${req.user._id}`);
@@ -429,7 +455,8 @@ export const getUserStats = async (req, res) => {
       }
     }
     
-    const completed = achievements.filter(a => a.completed).length;
+    // CRITICAL FIX: Count only truly completed achievements
+    const completed = achievements.filter(a => a.completed === true).length;
     const total = achievements.length;
     
     console.log(`✅ Stats retrieved: ${completed}/${total} achievements completed`);
@@ -437,7 +464,7 @@ export const getUserStats = async (req, res) => {
     res.json({
       success: true,
       stats: user.stats,
-      badges: user.badges,
+      badges: user.badges || [],
       achievementProgress: {
         completed,
         total,
