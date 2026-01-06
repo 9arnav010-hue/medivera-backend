@@ -114,9 +114,9 @@ export const changePassword = async (req, res) => {
       });
     }
 
-    // Hash new password
-    const salt = await bcrypt.genSalt(10);
-    user.password = await bcrypt.hash(newPassword, salt);
+    // FIX: Use bcrypt.hash with salt rounds directly
+    const saltRounds = 10;
+    user.password = await bcrypt.hash(newPassword, saltRounds);
 
     await user.save();
 
