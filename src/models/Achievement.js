@@ -31,6 +31,7 @@ const achievementSchema = new mongoose.Schema(
         'chat',
         'report',
         'vision',
+        'symptom',  // Added missing category
         'streak',
         'special',
         // LazySense categories
