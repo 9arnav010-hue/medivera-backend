@@ -4,7 +4,51 @@ import User from '../models/User.js';
 import Territory from '../models/Territory.js';
 import Team from '../models/Team.js';
 
-// Create a new run - ✅ FIXED with Team updates
+// Helper function to ensure proper GeoJSON format
+const ensureGeoJSONPoint = (coordinates) => {
+  // Make sure coordinates is a flat array of 2 numbers [lng, lat]
+  if (!Array.isArray(coordinates)) {
+    throw new Error('Coordinates must be an array');
+  }
+  
+  // If coordinates is nested (e.g., [[lng, lat]]), flatten it
+  if (Array.isArray(coordinates[0]) && Array.isArray(coordinates[0][0])) {
+    // If deeply nested, get the first inner array
+    coordinates = coordinates[0];
+  }
+  
+  // Ensure we have exactly 2 numeric values
+  const lng = parseFloat(coordinates[0]);
+  const lat = parseFloat(coordinates[1]);
+  
+  if (isNaN(lng) || isNaN(lat)) {
+    throw new Error('Coordinates must contain valid numbers');
+  }
+  
+  return [lng, lat];
+};
+
+// Validate and fix route coordinates
+const validateRouteCoordinates = (coordinates) => {
+  if (!Array.isArray(coordinates)) {
+    throw new Error('Route coordinates must be an array');
+  }
+  
+  // If it's a single coordinate array, wrap it in another array
+  if (coordinates.length > 0 && !Array.isArray(coordinates[0])) {
+    return [coordinates];
+  }
+  
+  // Validate each coordinate pair
+  return coordinates.map(coord => {
+    if (!Array.isArray(coord) || coord.length < 2) {
+      throw new Error('Each coordinate must be an array of [lng, lat]');
+    }
+    return [parseFloat(coord[0]), parseFloat(coord[1])];
+  });
+};
+
+// Create a new run - ✅ FIXED with proper GeoJSON format
 export const createRun = async (req, res) => {
   try {
     const { 
@@ -29,32 +73,75 @@ export const createRun = async (req, res) => {
       });
     }
 
+    // Validate and fix coordinates format
+    let routeCoordinates;
+    try {
+      routeCoordinates = validateRouteCoordinates(route.coordinates);
+    } catch (error) {
+      return res.status(400).json({ 
+        message: `Invalid route coordinates: ${error.message}` 
+      });
+    }
+
     // Calculate pace if not provided
     const calculatedPace = pace || (duration / distance);
 
-    // Ensure coordinates are in correct format
-    const routeCoordinates = Array.isArray(route.coordinates[0]) 
-      ? route.coordinates 
-      : [route.coordinates];
+    // Prepare GeoJSON point objects for start and end locations
+    let startPoint, endPoint;
+    try {
+      // If startLocation is provided, use it, otherwise use first route coordinate
+      if (startLocation && startLocation.coordinates) {
+        const coords = ensureGeoJSONPoint(startLocation.coordinates);
+        startPoint = {
+          type: 'Point',
+          coordinates: coords
+        };
+      } else {
+        // Use first route coordinate (already validated)
+        startPoint = {
+          type: 'Point',
+          coordinates: routeCoordinates[0]
+        };
+      }
+
+      // If endLocation is provided, use it, otherwise use last route coordinate
+      if (endLocation && endLocation.coordinates) {
+        const coords = ensureGeoJSONPoint(endLocation.coordinates);
+        endPoint = {
+          type: 'Point',
+          coordinates: coords
+        };
+      } else {
+        // Use last route coordinate (already validated)
+        endPoint = {
+          type: 'Point',
+          coordinates: routeCoordinates[routeCoordinates.length - 1]
+        };
+      }
+    } catch (error) {
+      return res.status(400).json({ 
+        message: `Invalid location coordinates: ${error.message}` 
+      });
+    }
+
+    console.log('Creating run with:', {
+      startLocation: startPoint,
+      endLocation: endPoint,
+      routeCoordinatesLength: routeCoordinates.length
+    });
 
     const run = new Run({
       userId,
-      distance,
-      duration,
+      distance: parseFloat(distance),
+      duration: parseFloat(duration),
       pace: calculatedPace,
-      calories: calories || Math.round(distance * 60), // Rough estimate
+      calories: calories || Math.round(distance * 60),
       route: {
         type: 'LineString',
         coordinates: routeCoordinates
       },
-      startLocation: startLocation || {
-        type: 'Point',
-        coordinates: routeCoordinates[0]
-      },
-      endLocation: endLocation || {
-        type: 'Point',
-        coordinates: routeCoordinates[routeCoordinates.length - 1]
-      },
+      startLocation: startPoint,
+      endLocation: endPoint,
       avgHeartRate,
       maxHeartRate,
       elevationGain: elevationGain || 0,
@@ -65,9 +152,9 @@ export const createRun = async (req, res) => {
 
     // Update user statistics
     const user = await User.findById(userId);
-    user.totalDistance = (user.totalDistance || 0) + distance;
+    user.totalDistance = (user.totalDistance || 0) + parseFloat(distance);
     user.totalRuns = (user.totalRuns || 0) + 1;
-    user.totalDuration = (user.totalDuration || 0) + duration;
+    user.totalDuration = (user.totalDuration || 0) + parseFloat(duration);
     user.totalCalories = (user.totalCalories || 0) + (calories || Math.round(distance * 60));
     
     // Update points
@@ -77,26 +164,25 @@ export const createRun = async (req, res) => {
     await user.save();
 
     // ✅ UPDATE TEAM STATS IF USER IS IN A TEAM
-    // Update team contribution if user is in a team
-const userTeam = await Team.findOne({ 'members.user': userId });
-if (userTeam) {
-  const memberIndex = userTeam.members.findIndex(
-    m => m.user.toString() === userId.toString()
-  );
-  
-  if (memberIndex !== -1) {
-    userTeam.members[memberIndex].contribution.distance += distance;
-    userTeam.members[memberIndex].contribution.runs += 1;
-    userTeam.members[memberIndex].contribution.points += pointsEarned;
-    
-    userTeam.totalDistance += distance;
-    userTeam.totalRuns += 1;
-    userTeam.totalPoints += pointsEarned;
-    
-    await userTeam.save();
-    console.log(`✅ Team stats updated for: ${userTeam.name}`);
-  }
-}
+    const userTeam = await Team.findOne({ 'members.user': userId });
+    if (userTeam) {
+      const memberIndex = userTeam.members.findIndex(
+        m => m.user.toString() === userId.toString()
+      );
+      
+      if (memberIndex !== -1) {
+        userTeam.members[memberIndex].contribution.distance += parseFloat(distance);
+        userTeam.members[memberIndex].contribution.runs += 1;
+        userTeam.members[memberIndex].contribution.points += pointsEarned;
+        
+        userTeam.totalDistance += parseFloat(distance);
+        userTeam.totalRuns += 1;
+        userTeam.totalPoints += pointsEarned;
+        
+        await userTeam.save();
+        console.log(`✅ Team stats updated for: ${userTeam.name}`);
+      }
+    }
 
     res.status(201).json({
       message: 'Run created successfully',
@@ -110,7 +196,19 @@ if (userTeam) {
     });
   } catch (error) {
     console.error('Create run error:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    
+    // Provide more specific error messages for GeoJSON errors
+    if (error.message.includes('geo keys') || error.message.includes('Point')) {
+      return res.status(400).json({ 
+        message: 'Invalid geographic data format. Please ensure coordinates are properly formatted.',
+        error: error.message 
+      });
+    }
+    
+    res.status(500).json({ 
+      message: 'Server error', 
+      error: error.message 
+    });
   }
 };
 
