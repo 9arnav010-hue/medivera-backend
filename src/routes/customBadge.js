@@ -6,7 +6,7 @@ import {
   removeCustomBadge,
   getUserCustomBadges,
   awardBadgeToSelf
-} from '../controllers/CustomBadgecontroller.js';
+} from '../controllers/customBadgecontroller.js';
 import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -27,3 +27,4 @@ router.get('/user/:userId', getUserCustomBadges);
 
 
 export default router;
+
