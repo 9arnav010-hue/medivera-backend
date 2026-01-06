@@ -4,70 +4,58 @@ import User from '../models/User.js';
 import Territory from '../models/Territory.js';
 import Team from '../models/Team.js';
 
-// Helper function to ensure proper GeoJSON format
-const formatCoordinates = (coords) => {
-  console.log('Formatting coordinates:', coords);
-  
-  // If coordinates are undefined or null, return default
-  if (!coords) {
-    return [0, 0];
+// SIMPLIFIED: No coordinate formatting needed - frontend sends correct format
+const validateGeoJSONPoint = (point) => {
+  if (!point || !point.coordinates || !Array.isArray(point.coordinates)) {
+    throw new Error('Invalid Point: coordinates must be an array');
   }
   
-  // If it's already a flat array of 2 numbers, return as is
-  if (Array.isArray(coords) && coords.length === 2) {
-    const lng = parseFloat(coords[0]);
-    const lat = parseFloat(coords[1]);
+  if (point.coordinates.length !== 2) {
+    throw new Error('Invalid Point: coordinates must have exactly 2 elements [lng, lat]');
+  }
+  
+  const [lng, lat] = point.coordinates;
+  
+  if (typeof lng !== 'number' || typeof lat !== 'number') {
+    throw new Error('Invalid Point: coordinates must be numbers');
+  }
+  
+  if (lng < -180 || lng > 180 || lat < -90 || lat > 90) {
+    throw new Error('Invalid Point: coordinates out of valid range');
+  }
+  
+  return true;
+};
+
+const validateGeoJSONLineString = (lineString) => {
+  if (!lineString || !lineString.coordinates || !Array.isArray(lineString.coordinates)) {
+    throw new Error('Invalid LineString: coordinates must be an array');
+  }
+  
+  if (lineString.coordinates.length < 2) {
+    throw new Error('Invalid LineString: must have at least 2 coordinate pairs');
+  }
+  
+  lineString.coordinates.forEach((coord, index) => {
+    if (!Array.isArray(coord) || coord.length !== 2) {
+      throw new Error(`Invalid LineString: coordinate at index ${index} must be [lng, lat]`);
+    }
     
-    if (!isNaN(lng) && !isNaN(lat)) {
-      return [lng, lat];
+    const [lng, lat] = coord;
+    
+    if (typeof lng !== 'number' || typeof lat !== 'number') {
+      throw new Error(`Invalid LineString: coordinate at index ${index} must contain numbers`);
     }
-  }
-  
-  // If it's nested (e.g., [[lng, lat]]), flatten it
-  if (Array.isArray(coords) && Array.isArray(coords[0])) {
-    const inner = coords[0];
-    if (Array.isArray(inner) && inner.length === 2) {
-      const lng = parseFloat(inner[0]);
-      const lat = parseFloat(inner[1]);
-      
-      if (!isNaN(lng) && !isNaN(lat)) {
-        return [lng, lat];
-      }
-    } else if (inner.length === 2) {
-      const lng = parseFloat(inner[0]);
-      const lat = parseFloat(inner[1]);
-      
-      if (!isNaN(lng) && !isNaN(lat)) {
-        return [lng, lat];
-      }
+    
+    if (lng < -180 || lng > 180 || lat < -90 || lat > 90) {
+      throw new Error(`Invalid LineString: coordinate at index ${index} out of valid range`);
     }
-  }
+  });
   
-  // Default fallback
-  console.warn('Could not parse coordinates, using default:', coords);
-  return [0, 0];
+  return true;
 };
 
-// Validate and format route coordinates
-const formatRouteCoordinates = (coordinates) => {
-  if (!Array.isArray(coordinates)) {
-    throw new Error('Route coordinates must be an array');
-  }
-  
-  // Handle single coordinate array
-  if (coordinates.length > 0 && !Array.isArray(coordinates[0])) {
-    const formatted = formatCoordinates(coordinates);
-    return [formatted];
-  }
-  
-  // Format all coordinates
-  return coordinates.map(coord => {
-    const formatted = formatCoordinates(coord);
-    return formatted;
-  }).filter(coord => coord[0] !== 0 || coord[1] !== 0); // Filter out invalid coords
-};
-
-// Create a new run - COMPLETELY REWRITTEN with proper GeoJSON handling
+// Create a new run - SIMPLIFIED VERSION
 export const createRun = async (req, res) => {
   try {
     const { 
@@ -80,74 +68,56 @@ export const createRun = async (req, res) => {
       endLocation,
       avgHeartRate,
       maxHeartRate,
-      elevationGain
+      elevationGain,
+      weather
     } = req.body;
     
     const userId = req.user.id;
 
     console.log('=== CREATE RUN REQUEST ===');
     console.log('User ID:', userId);
-    console.log('Raw data:', {
-      distance, 
-      duration, 
-      routeType: route?.type,
-      routeCoordsLength: route?.coordinates?.length,
-      startCoords: startLocation?.coordinates,
-      endCoords: endLocation?.coordinates
-    });
+    console.log('Distance:', distance);
+    console.log('Duration:', duration);
+    console.log('Route type:', route?.type);
+    console.log('Route coordinates count:', route?.coordinates?.length);
+    console.log('First coordinate:', route?.coordinates?.[0]);
+    console.log('Start location:', startLocation?.coordinates);
+    console.log('End location:', endLocation?.coordinates);
 
     // Validate required fields
     if (!distance || !duration) {
       return res.status(400).json({ 
+        success: false,
         message: 'Missing required fields: distance and duration' 
       });
     }
 
-    // Validate route
-    if (!route || !route.coordinates || !Array.isArray(route.coordinates)) {
+    // Validate route structure
+    if (!route || route.type !== 'LineString' || !route.coordinates) {
       return res.status(400).json({ 
-        message: 'Route coordinates are required and must be an array' 
+        success: false,
+        message: 'Invalid route: must be a LineString with coordinates' 
       });
     }
 
-    // Format coordinates with error handling
-    let routeCoordinates;
+    // Validate GeoJSON structures
     try {
-      routeCoordinates = formatRouteCoordinates(route.coordinates);
-    } catch (error) {
+      validateGeoJSONLineString(route);
+      validateGeoJSONPoint(startLocation);
+      validateGeoJSONPoint(endLocation);
+    } catch (validationError) {
+      console.error('GeoJSON validation error:', validationError.message);
       return res.status(400).json({ 
-        message: `Invalid route coordinates: ${error.message}` 
+        success: false,
+        message: 'Invalid GeoJSON format',
+        error: validationError.message
       });
     }
-
-    // Validate we have at least 2 coordinates for a LineString
-    if (routeCoordinates.length < 2) {
-      return res.status(400).json({ 
-        message: 'Route must have at least 2 coordinates' 
-      });
-    }
-
-    // Format start and end locations
-    const startCoords = formatCoordinates(
-      startLocation?.coordinates || routeCoordinates[0]
-    );
-    
-    const endCoords = formatCoordinates(
-      endLocation?.coordinates || routeCoordinates[routeCoordinates.length - 1]
-    );
-
-    console.log('Formatted coordinates:', {
-      start: startCoords,
-      end: endCoords,
-      routeCount: routeCoordinates.length,
-      firstRoutePoint: routeCoordinates[0],
-      lastRoutePoint: routeCoordinates[routeCoordinates.length - 1]
-    });
 
     // Calculate pace if not provided
     const calculatedPace = pace || (distance > 0 ? duration / distance : 0);
 
-    // Prepare the run object with CORRECT GeoJSON format
+    // Prepare the run object - NO TRANSFORMATION, use data as-is
     const runData = {
       userId,
       distance: parseFloat(distance),
@@ -156,28 +126,29 @@ export const createRun = async (req, res) => {
       calories: calories || Math.round(distance * 60),
       route: {
         type: 'LineString',
-        coordinates: routeCoordinates
+        coordinates: route.coordinates // Use as-is from frontend
       },
       startLocation: {
         type: 'Point',
-        coordinates: startCoords
+        coordinates: startLocation.coordinates // Use as-is from frontend
       },
       endLocation: {
         type: 'Point',
-        coordinates: endCoords
+        coordinates: endLocation.coordinates // Use as-is from frontend
       },
       avgHeartRate: avgHeartRate || null,
       maxHeartRate: maxHeartRate || null,
       elevationGain: elevationGain || 0,
-      weather: req.body.weather || {}
+      weather: weather || {}
     };
 
-    console.log('Final run data for MongoDB:', JSON.stringify({
-      ...runData,
-      route: { ...runData.route, coordinates: `[${runData.route.coordinates.length} points]` },
-      startLocation: runData.startLocation,
-      endLocation: runData.endLocation
-    }, null, 2));
+    console.log('Saving run data to MongoDB...');
+    console.log('Route sample:', {
+      type: runData.route.type,
+      coordinatesCount: runData.route.coordinates.length,
+      firstCoord: runData.route.coordinates[0],
+      lastCoord: runData.route.coordinates[runData.route.coordinates.length - 1]
+    });
 
     // Create and save run
     const run = new Run(runData);
@@ -223,36 +194,61 @@ export const createRun = async (req, res) => {
         }
       } catch (teamError) {
         console.error('Team update error (non-fatal):', teamError.message);
-        // Continue even if team update fails
       }
-    }
 
-    res.status(201).json({
-      message: 'Run created successfully',
-      run: {
-        id: run._id,
-        distance: run.distance,
-        duration: run.duration,
-        pace: run.pace,
-        calories: run.calories,
-        createdAt: run.createdAt
-      },
-      pointsEarned: Math.round(distance * 10),
-      stats: user ? {
-        totalDistance: user.totalDistance,
-        totalRuns: user.totalRuns,
-        totalPoints: user.points
-      } : null
-    });
+      res.status(201).json({
+        success: true,
+        message: 'Run created successfully',
+        run: {
+          id: run._id,
+          distance: run.distance,
+          duration: run.duration,
+          pace: run.pace,
+          calories: run.calories,
+          createdAt: run.createdAt
+        },
+        pointsEarned: Math.round(distance * 10),
+        stats: {
+          totalDistance: user.totalDistance,
+          totalRuns: user.totalRuns,
+          totalPoints: user.points
+        }
+      });
+    } else {
+      res.status(201).json({
+        success: true,
+        message: 'Run created successfully',
+        run: {
+          id: run._id,
+          distance: run.distance,
+          duration: run.duration,
+          pace: run.pace,
+          calories: run.calories,
+          createdAt: run.createdAt
+        }
+      });
+    }
 
   } catch (error) {
     console.error('❌ CREATE RUN ERROR:', error);
     
-    // Special handling for GeoJSON errors
-    if (error.message.includes('geo keys') || 
+    // Handle MongoDB duplicate key errors
+    if (error.code === 11000) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Duplicate run entry detected',
+        error: 'This run may have already been saved'
+      });
+    }
+    
+    // Handle GeoJSON/geospatial errors
+    if (error.message && (
+        error.message.includes('geo keys') || 
         error.message.includes('Point') || 
-        error.message.includes('coordinates')) {
-      
+        error.message.includes('coordinates') ||
+        error.message.includes('geospatial') ||
+        error.code === 16755
+    )) {
       console.error('GeoJSON Error Details:', {
         name: error.name,
         code: error.code,
@@ -262,7 +258,7 @@ export const createRun = async (req, res) => {
       return res.status(400).json({ 
         success: false,
         message: 'Invalid geographic data format',
-        error: 'Please ensure coordinates are in the correct format: [longitude, latitude]',
+        error: 'Coordinates must be in GeoJSON format: [longitude, latitude]',
         details: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
@@ -292,10 +288,8 @@ export const getUserRuns = async (req, res) => {
     const userId = req.params.userId || req.user.id;
     const { limit = 20, skip = 0, sortBy = 'createdAt', startDate, endDate } = req.query;
 
-    // Build query
     const query = { userId };
     
-    // Date filtering
     if (startDate || endDate) {
       query.createdAt = {};
       if (startDate) query.createdAt.$gte = new Date(startDate);
@@ -352,7 +346,7 @@ export const getRunDetails = async (req, res) => {
       });
     }
 
-    // Check if user owns this run or is admin
+    // Check authorization
     if (run.userId._id.toString() !== userId.toString() && req.user.role !== 'admin') {
       return res.status(403).json({ 
         success: false,
@@ -360,7 +354,7 @@ export const getRunDetails = async (req, res) => {
       });
     }
 
-    // Check if this run created any territories
+    // Check for associated territories
     const territory = await Territory.findOne({ runId: run._id });
 
     // Calculate statistics
@@ -476,7 +470,6 @@ export const deleteRun = async (req, res) => {
       user.totalDuration = Math.max(0, (user.totalDuration || 0) - run.duration);
       user.totalCalories = Math.max(0, (user.totalCalories || 0) - (run.calories || 0));
       
-      // Remove points (10 points per km)
       const pointsToRemove = Math.round(run.distance * 10);
       user.points = Math.max(0, (user.points || 0) - pointsToRemove);
       
@@ -537,7 +530,6 @@ export const getRunStats = async (req, res) => {
 
     const runs = await Run.find({ userId, ...dateFilter }).lean();
 
-    // Calculate statistics
     const totalDistance = runs.reduce((sum, r) => sum + r.distance, 0);
     const totalDuration = runs.reduce((sum, r) => sum + r.duration, 0);
     const totalCalories = runs.reduce((sum, r) => sum + (r.calories || 0), 0);
@@ -578,7 +570,6 @@ export const getRunStats = async (req, res) => {
       runsByDay[date].calories += run.calories || 0;
     });
 
-    // Calculate average pace per day
     Object.values(runsByDay).forEach(day => {
       day.avgPace = day.distance > 0 ? (day.duration / 60 / day.distance).toFixed(2) : 0;
     });
@@ -617,7 +608,6 @@ export const getNearbyRuns = async (req, res) => {
   try {
     const { lat, lng, radius = 5000, limit = 20 } = req.query;
 
-    // Validate coordinates
     const latitude = parseFloat(lat);
     const longitude = parseFloat(lng);
     
@@ -647,7 +637,6 @@ export const getNearbyRuns = async (req, res) => {
       success: true,
       runs: runs.map(run => ({
         ...run,
-        distanceFromPoint: null, // Would need calculation
         formattedDistance: run.distance < 1 ? 
           `${(run.distance * 1000).toFixed(0)}m` : 
           `${run.distance.toFixed(2)}km`
@@ -665,7 +654,6 @@ export const getNearbyRuns = async (req, res) => {
   }
 };
 
-// Export all functions
 export default {
   createRun,
   getUserRuns,
