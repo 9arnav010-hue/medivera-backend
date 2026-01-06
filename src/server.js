@@ -36,7 +36,7 @@ connectDB();
 
 // Middleware
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'https://medivera.onrender.com/',
+  origin: process.env.FRONTEND_URL || 'https://medivera.onrender.com',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -250,4 +250,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`👨‍💻 Created by Anurag & Arnav`);
   console.log(`📝 MongoDB Connected: ac-ap4jv39a-shard-00-00.m25lgcj.mongodb.net`);
 });
+
 
