@@ -241,10 +241,11 @@ app.use('*', (req, res) => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
-const HOST = process.env.HOST || 'localhost';
 
-app.listen(PORT, HOST, () => {
+const HOST = process.env.HOST || 'localhost';
+const PORT = process.env.PORT || 10000;
+
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 HealthSphere.AI Server running on port ${PORT}`);
   console.log(`👨‍💻 Created by Anurag & Arnav`);
   console.log(`📝 MongoDB Connected: ac-ap4jv39a-shard-00-00.m25lgcj.mongodb.net`);
