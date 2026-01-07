@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 
+// CRITICAL FIX: Use typeKey option to avoid conflict with GeoJSON 'type' field
 const runSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -25,85 +26,59 @@ const runSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
-  // GeoJSON LineString for route path
+  // CRITICAL FIX: GeoJSON LineString - use proper nested schema
   route: {
     type: {
       type: String,
       enum: ['LineString'],
-      required: true
+      required: true,
+      default: 'LineString'
     },
     coordinates: {
-      type: [[Number]], // Array of [longitude, latitude] pairs
-      required: true,
-      validate: {
-        validator: function(coords) {
-          return Array.isArray(coords) && 
-                 coords.length >= 2 &&
-                 coords.every(coord => 
-                   Array.isArray(coord) && 
-                   coord.length === 2 &&
-                   typeof coord[0] === 'number' && 
-                   typeof coord[1] === 'number'
-                 );
-        },
-        message: 'LineString must have at least 2 coordinate pairs [longitude, latitude]'
-      }
+      type: [[Number]], // Array of [lng, lat] pairs
+      required: true
     }
   },
-  // GeoJSON Point for start location
+  // CRITICAL FIX: GeoJSON Point - use proper nested schema
   startLocation: {
     type: {
       type: String,
       enum: ['Point'],
-      required: true
+      required: true,
+      default: 'Point'
     },
     coordinates: {
-      type: [Number], // [longitude, latitude]
+      type: [Number], // [lng, lat]
       required: true,
       validate: {
-        validator: function(coords) {
-          return Array.isArray(coords) && 
-                 coords.length === 2 && 
-                 typeof coords[0] === 'number' && 
-                 typeof coords[1] === 'number' &&
-                 coords[0] >= -180 && coords[0] <= 180 &&
-                 coords[1] >= -90 && coords[1] <= 90;
+        validator: function(v) {
+          return v.length === 2;
         },
-        message: 'Point coordinates must be [longitude, latitude] with valid ranges'
+        message: 'Coordinates must be [longitude, latitude]'
       }
     }
   },
-  // GeoJSON Point for end location
+  // CRITICAL FIX: GeoJSON Point - use proper nested schema
   endLocation: {
     type: {
       type: String,
       enum: ['Point'],
-      required: true
+      required: true,
+      default: 'Point'
     },
     coordinates: {
-      type: [Number], // [longitude, latitude]
+      type: [Number], // [lng, lat]
       required: true,
       validate: {
-        validator: function(coords) {
-          return Array.isArray(coords) && 
-                 coords.length === 2 && 
-                 typeof coords[0] === 'number' && 
-                 typeof coords[1] === 'number' &&
-                 coords[0] >= -180 && coords[0] <= 180 &&
-                 coords[1] >= -90 && coords[1] <= 90;
+        validator: function(v) {
+          return v.length === 2;
         },
-        message: 'Point coordinates must be [longitude, latitude] with valid ranges'
+        message: 'Coordinates must be [longitude, latitude]'
       }
     }
   },
-  avgHeartRate: {
-    type: Number,
-    min: 0
-  },
-  maxHeartRate: {
-    type: Number,
-    min: 0
-  },
+  avgHeartRate: Number,
+  maxHeartRate: Number,
   elevationGain: {
     type: Number,
     default: 0
@@ -118,21 +93,21 @@ const runSchema = new mongoose.Schema({
   tags: [String]
 }, {
   timestamps: true,
+  typeKey: '$type', // CRITICAL: Use $type instead of type to avoid GeoJSON conflicts
   toJSON: { virtuals: true },
   toObject: { virtuals: true }
 });
 
-// CRITICAL: 2dsphere indexes for geospatial queries
+// CRITICAL: Create 2dsphere indexes for geospatial queries
 runSchema.index({ startLocation: '2dsphere' });
 runSchema.index({ endLocation: '2dsphere' });
-runSchema.index({ route: '2dsphere' });
+runSchema.index({ 'route': '2dsphere' });
 
-// Additional indexes for queries
+// Additional useful indexes
 runSchema.index({ userId: 1, createdAt: -1 });
 runSchema.index({ distance: -1 });
-runSchema.index({ duration: -1 });
 
-// Virtual for formatted duration (HH:MM:SS)
+// Virtual for formatted duration
 runSchema.virtual('formattedDuration').get(function() {
   const hours = Math.floor(this.duration / 3600);
   const minutes = Math.floor((this.duration % 3600) / 60);
@@ -155,42 +130,52 @@ runSchema.virtual('formattedDistance').get(function() {
   return `${this.distance.toFixed(2)}km`;
 });
 
-// Virtual for average speed (km/h)
-runSchema.virtual('averageSpeed').get(function() {
-  if (this.duration === 0) return 0;
-  return (this.distance / (this.duration / 3600)).toFixed(2);
-});
-
-// Pre-save middleware to ensure coordinate data types
+// Pre-save validation to ensure proper coordinate format
 runSchema.pre('save', function(next) {
-  // Ensure startLocation coordinates are Numbers
+  // Validate startLocation
   if (this.startLocation && this.startLocation.coordinates) {
+    if (!Array.isArray(this.startLocation.coordinates) || 
+        this.startLocation.coordinates.length !== 2) {
+      return next(new Error('startLocation.coordinates must be [longitude, latitude]'));
+    }
+    // Ensure numbers
     this.startLocation.coordinates = [
       Number(this.startLocation.coordinates[0]),
       Number(this.startLocation.coordinates[1])
     ];
   }
   
-  // Ensure endLocation coordinates are Numbers
+  // Validate endLocation
   if (this.endLocation && this.endLocation.coordinates) {
+    if (!Array.isArray(this.endLocation.coordinates) || 
+        this.endLocation.coordinates.length !== 2) {
+      return next(new Error('endLocation.coordinates must be [longitude, latitude]'));
+    }
+    // Ensure numbers
     this.endLocation.coordinates = [
       Number(this.endLocation.coordinates[0]),
       Number(this.endLocation.coordinates[1])
     ];
   }
   
-  // Ensure route coordinates are Numbers
+  // Validate route
   if (this.route && this.route.coordinates) {
-    this.route.coordinates = this.route.coordinates.map(coord => [
-      Number(coord[0]),
-      Number(coord[1])
-    ]);
+    if (!Array.isArray(this.route.coordinates) || this.route.coordinates.length < 2) {
+      return next(new Error('route.coordinates must have at least 2 points'));
+    }
+    // Ensure all coordinates are numbers
+    this.route.coordinates = this.route.coordinates.map(coord => {
+      if (!Array.isArray(coord) || coord.length !== 2) {
+        throw new Error('Each route coordinate must be [longitude, latitude]');
+      }
+      return [Number(coord[0]), Number(coord[1])];
+    });
   }
   
   next();
 });
 
-// Method to get bounding box of route
+// Method to get bounding box
 runSchema.methods.getBoundingBox = function() {
   if (!this.route || !this.route.coordinates || this.route.coordinates.length === 0) {
     return null;
@@ -212,43 +197,6 @@ runSchema.methods.getBoundingBox = function() {
     northeast: [maxLng, maxLat],
     center: [(minLng + maxLng) / 2, (minLat + maxLat) / 2]
   };
-};
-
-// Static method to find runs near a location
-runSchema.statics.findNearby = function(lng, lat, maxDistance = 5000) {
-  return this.find({
-    startLocation: {
-      $near: {
-        $geometry: {
-          type: 'Point',
-          coordinates: [lng, lat]
-        },
-        $maxDistance: maxDistance
-      }
-    }
-  });
-};
-
-// Static method to get user stats
-runSchema.statics.getUserStats = async function(userId) {
-  const stats = await this.aggregate([
-    { $match: { userId: mongoose.Types.ObjectId(userId) } },
-    {
-      $group: {
-        _id: null,
-        totalRuns: { $sum: 1 },
-        totalDistance: { $sum: '$distance' },
-        totalDuration: { $sum: '$duration' },
-        totalCalories: { $sum: '$calories' },
-        avgDistance: { $avg: '$distance' },
-        avgPace: { $avg: '$pace' },
-        maxDistance: { $max: '$distance' },
-        maxDuration: { $max: '$duration' }
-      }
-    }
-  ]);
-  
-  return stats.length > 0 ? stats[0] : null;
 };
 
 export default mongoose.model('Run', runSchema);
