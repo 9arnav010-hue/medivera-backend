@@ -25,74 +25,85 @@ const runSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
-  // 🚨 FIXED: Correct GeoJSON structure for LineString
+  // GeoJSON LineString for route path
   route: {
     type: {
       type: String,
       enum: ['LineString'],
-      default: 'LineString',
-      required: true  // Added required
+      required: true
     },
     coordinates: {
-      type: [[Number]], // Array of [lng, lat] pairs
+      type: [[Number]], // Array of [longitude, latitude] pairs
       required: true,
       validate: {
         validator: function(coords) {
-          // Validate at least 2 points for a LineString
-          return Array.isArray(coords) && coords.length >= 2;
+          return Array.isArray(coords) && 
+                 coords.length >= 2 &&
+                 coords.every(coord => 
+                   Array.isArray(coord) && 
+                   coord.length === 2 &&
+                   typeof coord[0] === 'number' && 
+                   typeof coord[1] === 'number'
+                 );
         },
-        message: 'LineString must have at least 2 coordinate points'
+        message: 'LineString must have at least 2 coordinate pairs [longitude, latitude]'
       }
     }
   },
-  // 🚨 FIXED: Correct GeoJSON structure for Point
+  // GeoJSON Point for start location
   startLocation: {
     type: {
       type: String,
       enum: ['Point'],
-      default: 'Point',
-      required: true  // Added required
+      required: true
     },
     coordinates: {
-      type: [Number], // [lng, lat]
+      type: [Number], // [longitude, latitude]
       required: true,
       validate: {
         validator: function(coords) {
-          // Validate exactly 2 numbers [lng, lat]
           return Array.isArray(coords) && 
                  coords.length === 2 && 
                  typeof coords[0] === 'number' && 
-                 typeof coords[1] === 'number';
+                 typeof coords[1] === 'number' &&
+                 coords[0] >= -180 && coords[0] <= 180 &&
+                 coords[1] >= -90 && coords[1] <= 90;
         },
-        message: 'Point coordinates must be an array of exactly 2 numbers [longitude, latitude]'
+        message: 'Point coordinates must be [longitude, latitude] with valid ranges'
       }
     }
   },
-  // 🚨 FIXED: Correct GeoJSON structure for Point
+  // GeoJSON Point for end location
   endLocation: {
     type: {
       type: String,
       enum: ['Point'],
-      default: 'Point',
-      required: true  // Added required
+      required: true
     },
     coordinates: {
-      type: [Number], // [lng, lat]
+      type: [Number], // [longitude, latitude]
       required: true,
       validate: {
         validator: function(coords) {
-          // Validate exactly 2 numbers [lng, lat]
           return Array.isArray(coords) && 
                  coords.length === 2 && 
                  typeof coords[0] === 'number' && 
-                 typeof coords[1] === 'number';
+                 typeof coords[1] === 'number' &&
+                 coords[0] >= -180 && coords[0] <= 180 &&
+                 coords[1] >= -90 && coords[1] <= 90;
         },
-        message: 'Point coordinates must be an array of exactly 2 numbers [longitude, latitude]'
+        message: 'Point coordinates must be [longitude, latitude] with valid ranges'
       }
     }
   },
-  avgHeartRate: Number,
-  maxHeartRate: Number,
+  avgHeartRate: {
+    type: Number,
+    min: 0
+  },
+  maxHeartRate: {
+    type: Number,
+    min: 0
+  },
   elevationGain: {
     type: Number,
     default: 0
@@ -107,35 +118,21 @@ const runSchema = new mongoose.Schema({
   tags: [String]
 }, {
   timestamps: true,
-  // Important for GeoJSON queries
   toJSON: { virtuals: true },
   toObject: { virtuals: true }
 });
 
-// 🚨 CRITICAL FIX: Correct 2dsphere indexes for GeoJSON
-// MongoDB expects the entire GeoJSON object, not just coordinates
+// CRITICAL: 2dsphere indexes for geospatial queries
 runSchema.index({ startLocation: '2dsphere' });
 runSchema.index({ endLocation: '2dsphere' });
-runSchema.index({ route: '2dsphere' }); // Index the entire route object, not just coordinates
+runSchema.index({ route: '2dsphere' });
 
-// 🚨 Add validation for coordinate ranges
-runSchema.path('startLocation.coordinates').validate({
-  validator: function(coords) {
-    const [lng, lat] = coords;
-    return lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90;
-  },
-  message: 'Coordinates must be valid: longitude [-180, 180], latitude [-90, 90]'
-});
+// Additional indexes for queries
+runSchema.index({ userId: 1, createdAt: -1 });
+runSchema.index({ distance: -1 });
+runSchema.index({ duration: -1 });
 
-runSchema.path('endLocation.coordinates').validate({
-  validator: function(coords) {
-    const [lng, lat] = coords;
-    return lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90;
-  },
-  message: 'Coordinates must be valid: longitude [-180, 180], latitude [-90, 90]'
-});
-
-// Virtual for formatted duration
+// Virtual for formatted duration (HH:MM:SS)
 runSchema.virtual('formattedDuration').get(function() {
   const hours = Math.floor(this.duration / 3600);
   const minutes = Math.floor((this.duration % 3600) / 60);
@@ -158,28 +155,35 @@ runSchema.virtual('formattedDistance').get(function() {
   return `${this.distance.toFixed(2)}km`;
 });
 
-// Pre-save middleware to ensure data consistency
+// Virtual for average speed (km/h)
+runSchema.virtual('averageSpeed').get(function() {
+  if (this.duration === 0) return 0;
+  return (this.distance / (this.duration / 3600)).toFixed(2);
+});
+
+// Pre-save middleware to ensure coordinate data types
 runSchema.pre('save', function(next) {
-  // Ensure coordinates are numbers
+  // Ensure startLocation coordinates are Numbers
   if (this.startLocation && this.startLocation.coordinates) {
     this.startLocation.coordinates = [
-      parseFloat(this.startLocation.coordinates[0]),
-      parseFloat(this.startLocation.coordinates[1])
+      Number(this.startLocation.coordinates[0]),
+      Number(this.startLocation.coordinates[1])
     ];
   }
   
+  // Ensure endLocation coordinates are Numbers
   if (this.endLocation && this.endLocation.coordinates) {
     this.endLocation.coordinates = [
-      parseFloat(this.endLocation.coordinates[0]),
-      parseFloat(this.endLocation.coordinates[1])
+      Number(this.endLocation.coordinates[0]),
+      Number(this.endLocation.coordinates[1])
     ];
   }
   
-  // Ensure route coordinates are numbers
+  // Ensure route coordinates are Numbers
   if (this.route && this.route.coordinates) {
     this.route.coordinates = this.route.coordinates.map(coord => [
-      parseFloat(coord[0]),
-      parseFloat(coord[1])
+      Number(coord[0]),
+      Number(coord[1])
     ]);
   }
   
@@ -188,7 +192,7 @@ runSchema.pre('save', function(next) {
 
 // Method to get bounding box of route
 runSchema.methods.getBoundingBox = function() {
-  if (!this.route.coordinates || this.route.coordinates.length === 0) {
+  if (!this.route || !this.route.coordinates || this.route.coordinates.length === 0) {
     return null;
   }
   
@@ -205,8 +209,46 @@ runSchema.methods.getBoundingBox = function() {
   
   return {
     southwest: [minLng, minLat],
-    northeast: [maxLng, maxLat]
+    northeast: [maxLng, maxLat],
+    center: [(minLng + maxLng) / 2, (minLat + maxLat) / 2]
   };
+};
+
+// Static method to find runs near a location
+runSchema.statics.findNearby = function(lng, lat, maxDistance = 5000) {
+  return this.find({
+    startLocation: {
+      $near: {
+        $geometry: {
+          type: 'Point',
+          coordinates: [lng, lat]
+        },
+        $maxDistance: maxDistance
+      }
+    }
+  });
+};
+
+// Static method to get user stats
+runSchema.statics.getUserStats = async function(userId) {
+  const stats = await this.aggregate([
+    { $match: { userId: mongoose.Types.ObjectId(userId) } },
+    {
+      $group: {
+        _id: null,
+        totalRuns: { $sum: 1 },
+        totalDistance: { $sum: '$distance' },
+        totalDuration: { $sum: '$duration' },
+        totalCalories: { $sum: '$calories' },
+        avgDistance: { $avg: '$distance' },
+        avgPace: { $avg: '$pace' },
+        maxDistance: { $max: '$distance' },
+        maxDuration: { $max: '$duration' }
+      }
+    }
+  ]);
+  
+  return stats.length > 0 ? stats[0] : null;
 };
 
 export default mongoose.model('Run', runSchema);
