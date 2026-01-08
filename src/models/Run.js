@@ -1,51 +1,53 @@
 import mongoose from 'mongoose';
 
+// Define schema with typeKey FIRST to avoid conflicts
 const runSchema = new mongoose.Schema({
   userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'users', // ✅ Matches the actual MongoDB collection name
+    $type: mongoose.Schema.Types.ObjectId,
     required: true,
     index: true
   },
   distance: {
-    type: Number,
+    $type: Number,
     required: true,
     min: 0
   },
   duration: {
-    type: Number,
+    $type: Number,
     required: true,
     min: 0
   },
   pace: {
-    type: Number,
+    $type: Number,
     required: true
   },
   calories: {
-    type: Number,
+    $type: Number,
     default: 0
   },
+  // GeoJSON LineString
   route: {
     type: {
-      type: String,
+      $type: String,
       enum: ['LineString'],
       required: true,
       default: 'LineString'
     },
     coordinates: {
-      type: [[Number]],
+      $type: [[Number]],
       required: true
     }
   },
+  // GeoJSON Point
   startLocation: {
     type: {
-      type: String,
+      $type: String,
       enum: ['Point'],
       required: true,
       default: 'Point'
     },
     coordinates: {
-      type: [Number],
+      $type: [Number],
       required: true,
       validate: {
         validator: function(v) {
@@ -55,15 +57,16 @@ const runSchema = new mongoose.Schema({
       }
     }
   },
+  // GeoJSON Point
   endLocation: {
     type: {
-      type: String,
+      $type: String,
       enum: ['Point'],
       required: true,
       default: 'Point'
     },
     coordinates: {
-      type: [Number],
+      $type: [Number],
       required: true,
       validate: {
         validator: function(v) {
@@ -73,10 +76,14 @@ const runSchema = new mongoose.Schema({
       }
     }
   },
-  avgHeartRate: Number,
-  maxHeartRate: Number,
+  avgHeartRate: {
+    $type: Number
+  },
+  maxHeartRate: {
+    $type: Number
+  },
   elevationGain: {
-    type: Number,
+    $type: Number,
     default: 0
   },
   weather: {
@@ -88,11 +95,11 @@ const runSchema = new mongoose.Schema({
   feeling: String,
   tags: [String]
 }, {
-  timestamps: true,
-  typeKey: '$type' // CRITICAL: Avoids conflict with GeoJSON 'type' field
+  typeKey: '$type', // Use $type instead of type throughout
+  timestamps: true
 });
 
-// CRITICAL: Create 2dsphere indexes for geospatial queries
+// Create 2dsphere indexes for geospatial queries
 runSchema.index({ startLocation: '2dsphere' });
 runSchema.index({ endLocation: '2dsphere' });
 runSchema.index({ route: '2dsphere' });
@@ -122,10 +129,10 @@ runSchema.virtual('formattedDistance').get(function() {
   return `${this.distance.toFixed(2)}km`;
 });
 
-// Pre-save middleware to ensure coordinates are Numbers
+// Pre-save middleware
 runSchema.pre('save', function(next) {
   try {
-    // Validate and convert startLocation
+    // Ensure startLocation coordinates are Numbers
     if (this.startLocation && this.startLocation.coordinates) {
       if (!Array.isArray(this.startLocation.coordinates) || this.startLocation.coordinates.length !== 2) {
         return next(new Error('startLocation.coordinates must be [longitude, latitude]'));
@@ -136,7 +143,7 @@ runSchema.pre('save', function(next) {
       ];
     }
     
-    // Validate and convert endLocation
+    // Ensure endLocation coordinates are Numbers
     if (this.endLocation && this.endLocation.coordinates) {
       if (!Array.isArray(this.endLocation.coordinates) || this.endLocation.coordinates.length !== 2) {
         return next(new Error('endLocation.coordinates must be [longitude, latitude]'));
@@ -147,7 +154,7 @@ runSchema.pre('save', function(next) {
       ];
     }
     
-    // Validate and convert route
+    // Ensure route coordinates are Numbers
     if (this.route && this.route.coordinates) {
       if (!Array.isArray(this.route.coordinates) || this.route.coordinates.length < 2) {
         return next(new Error('route.coordinates must have at least 2 points'));
