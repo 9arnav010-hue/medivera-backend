@@ -1,11 +1,9 @@
 import mongoose from 'mongoose';
 
-// CRITICAL FIX: Use typeKey option to avoid conflict with GeoJSON 'type' field
 const runSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
-    // Try lowercase first, then uppercase - Mongoose will resolve it
-    ref: 'user',
+    ref: 'users', // ✅ Matches the actual MongoDB collection name
     required: true,
     index: true
   },
@@ -27,7 +25,6 @@ const runSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
-  // GeoJSON LineString for route
   route: {
     type: {
       type: String,
@@ -40,7 +37,6 @@ const runSchema = new mongoose.Schema({
       required: true
     }
   },
-  // GeoJSON Point for start
   startLocation: {
     type: {
       type: String,
@@ -53,13 +49,12 @@ const runSchema = new mongoose.Schema({
       required: true,
       validate: {
         validator: function(v) {
-          return v.length === 2;
+          return Array.isArray(v) && v.length === 2;
         },
         message: 'Coordinates must be [longitude, latitude]'
       }
     }
   },
-  // GeoJSON Point for end
   endLocation: {
     type: {
       type: String,
@@ -72,7 +67,7 @@ const runSchema = new mongoose.Schema({
       required: true,
       validate: {
         validator: function(v) {
-          return v.length === 2;
+          return Array.isArray(v) && v.length === 2;
         },
         message: 'Coordinates must be [longitude, latitude]'
       }
@@ -94,17 +89,13 @@ const runSchema = new mongoose.Schema({
   tags: [String]
 }, {
   timestamps: true,
-  typeKey: '$type', // CRITICAL: Avoids GeoJSON 'type' conflicts
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
+  typeKey: '$type' // CRITICAL: Avoids conflict with GeoJSON 'type' field
 });
 
-// CRITICAL: 2dsphere indexes
+// CRITICAL: Create 2dsphere indexes for geospatial queries
 runSchema.index({ startLocation: '2dsphere' });
 runSchema.index({ endLocation: '2dsphere' });
-runSchema.index({ 'route': '2dsphere' });
-
-// Additional indexes
+runSchema.index({ route: '2dsphere' });
 runSchema.index({ userId: 1, createdAt: -1 });
 runSchema.index({ distance: -1 });
 
@@ -131,46 +122,48 @@ runSchema.virtual('formattedDistance').get(function() {
   return `${this.distance.toFixed(2)}km`;
 });
 
-// Pre-save validation
+// Pre-save middleware to ensure coordinates are Numbers
 runSchema.pre('save', function(next) {
-  // Ensure startLocation coordinates are Numbers
-  if (this.startLocation && this.startLocation.coordinates) {
-    if (!Array.isArray(this.startLocation.coordinates) || 
-        this.startLocation.coordinates.length !== 2) {
-      return next(new Error('startLocation.coordinates must be [longitude, latitude]'));
-    }
-    this.startLocation.coordinates = [
-      Number(this.startLocation.coordinates[0]),
-      Number(this.startLocation.coordinates[1])
-    ];
-  }
-  
-  // Ensure endLocation coordinates are Numbers
-  if (this.endLocation && this.endLocation.coordinates) {
-    if (!Array.isArray(this.endLocation.coordinates) || 
-        this.endLocation.coordinates.length !== 2) {
-      return next(new Error('endLocation.coordinates must be [longitude, latitude]'));
-    }
-    this.endLocation.coordinates = [
-      Number(this.endLocation.coordinates[0]),
-      Number(this.endLocation.coordinates[1])
-    ];
-  }
-  
-  // Ensure route coordinates are Numbers
-  if (this.route && this.route.coordinates) {
-    if (!Array.isArray(this.route.coordinates) || this.route.coordinates.length < 2) {
-      return next(new Error('route.coordinates must have at least 2 points'));
-    }
-    this.route.coordinates = this.route.coordinates.map(coord => {
-      if (!Array.isArray(coord) || coord.length !== 2) {
-        throw new Error('Each route coordinate must be [longitude, latitude]');
+  try {
+    // Validate and convert startLocation
+    if (this.startLocation && this.startLocation.coordinates) {
+      if (!Array.isArray(this.startLocation.coordinates) || this.startLocation.coordinates.length !== 2) {
+        return next(new Error('startLocation.coordinates must be [longitude, latitude]'));
       }
-      return [Number(coord[0]), Number(coord[1])];
-    });
+      this.startLocation.coordinates = [
+        Number(this.startLocation.coordinates[0]),
+        Number(this.startLocation.coordinates[1])
+      ];
+    }
+    
+    // Validate and convert endLocation
+    if (this.endLocation && this.endLocation.coordinates) {
+      if (!Array.isArray(this.endLocation.coordinates) || this.endLocation.coordinates.length !== 2) {
+        return next(new Error('endLocation.coordinates must be [longitude, latitude]'));
+      }
+      this.endLocation.coordinates = [
+        Number(this.endLocation.coordinates[0]),
+        Number(this.endLocation.coordinates[1])
+      ];
+    }
+    
+    // Validate and convert route
+    if (this.route && this.route.coordinates) {
+      if (!Array.isArray(this.route.coordinates) || this.route.coordinates.length < 2) {
+        return next(new Error('route.coordinates must have at least 2 points'));
+      }
+      this.route.coordinates = this.route.coordinates.map(coord => {
+        if (!Array.isArray(coord) || coord.length !== 2) {
+          throw new Error('Each route coordinate must be [longitude, latitude]');
+        }
+        return [Number(coord[0]), Number(coord[1])];
+      });
+    }
+    
+    next();
+  } catch (error) {
+    next(error);
   }
-  
-  next();
 });
 
 // Method to get bounding box
@@ -197,7 +190,4 @@ runSchema.methods.getBoundingBox = function() {
   };
 };
 
-// IMPORTANT: Check if model already exists before creating
-const Run = mongoose.models.Run || mongoose.model('Run', runSchema);
-
-export default Run;
+export default mongoose.model('Run', runSchema);
