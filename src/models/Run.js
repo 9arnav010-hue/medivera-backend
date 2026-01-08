@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 
-// Define schema with typeKey FIRST to avoid conflicts
+// Run schema WITHOUT automatic 2dsphere index creation
+// Indexes will be created when first document is inserted
 const runSchema = new mongoose.Schema({
   userId: {
     $type: mongoose.Schema.Types.ObjectId,
@@ -95,14 +96,12 @@ const runSchema = new mongoose.Schema({
   feeling: String,
   tags: [String]
 }, {
-  typeKey: '$type', // Use $type instead of type throughout
-  timestamps: true
+  typeKey: '$type',
+  timestamps: true,
+  autoIndex: false // CRITICAL: Disable automatic index creation to avoid startup errors
 });
 
-// Create 2dsphere indexes for geospatial queries
-runSchema.index({ startLocation: '2dsphere' });
-runSchema.index({ endLocation: '2dsphere' });
-runSchema.index({ route: '2dsphere' });
+// Only index userId for queries - skip geospatial indexes at startup
 runSchema.index({ userId: 1, createdAt: -1 });
 runSchema.index({ distance: -1 });
 
@@ -195,6 +194,21 @@ runSchema.methods.getBoundingBox = function() {
     northeast: [maxLng, maxLat],
     center: [(minLng + maxLng) / 2, (minLat + maxLat) / 2]
   };
+};
+
+// Static method to manually create geospatial indexes after first document
+runSchema.statics.ensureGeoIndexes = async function() {
+  try {
+    console.log('📍 Creating geospatial indexes...');
+    
+    await this.collection.createIndex({ startLocation: '2dsphere' });
+    await this.collection.createIndex({ endLocation: '2dsphere' });
+    await this.collection.createIndex({ route: '2dsphere' });
+    
+    console.log('✅ Geospatial indexes created successfully');
+  } catch (error) {
+    console.error('⚠️ Error creating geospatial indexes (will retry):', error.message);
+  }
 };
 
 export default mongoose.model('Run', runSchema);
